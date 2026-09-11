@@ -21,6 +21,44 @@ message = codec.decode_message_from_file("output.mzML")
 successful encode is already round-trip verified. Use a fresh `SpectraCodec()`
 instance per file — encoding mutates instance state (`self.order`, curve arrays).
 
+## Decoding: recovering embedded files (Word docs, spreadsheets, PDFs, ...)
+
+The most common task: someone hands you an mzML and you want the documents
+embedded in it. The decoded message is JSON; each entry in `payload["files"]`
+carries everything needed to rebuild the original file and prove it's intact:
+
+```python
+import json, base64, hashlib
+from spectra_codec import SpectraCodec
+
+msg = json.loads(SpectraCodec().decode_message_from_file("run.mzML"))
+print(msg["unique_file_id"])          # identifies the run even if renamed
+
+for entry in msg["payload"]["files"]:
+    # entry["file_type"] / entry["mime_type"] say what it is
+    # (e.g. "Microsoft Word document", "Microsoft Excel workbook")
+    if entry["content_encoding"] == "base64":      # binary: docx, xlsx, pdf
+        data = base64.b64decode(entry["content"])
+    else:                                          # utf-8 text: md, csv, fasta
+        data = entry["content"].encode("utf-8")
+    assert hashlib.sha256(data).hexdigest() == entry["sha256"], entry["filename"]
+    with open(entry["filename"], "wb") as f:       # writes a working .docx/.xlsx/...
+        f.write(data)
+```
+
+Key facts:
+- `content_encoding` tells you how to rebuild: `base64` → decode to bytes and
+  write binary; `utf-8` → the string IS the file content. A rebuilt `.docx` or
+  `.xlsx` opens directly in Word/Excel — it is byte-identical to the original.
+- Always verify `sha256` after rebuilding; it is the integrity proof.
+- `scope: "common"` files are identical in every run of an experiment;
+  `scope: "run_specific"` files exist only in their run — recovering the full
+  set may require decoding several runs.
+- Batch version with logging and cross-run consistency checks:
+  `examples/embed_experiment_files/decode_all.py`.
+- Decode is read-only and fast (~3–10 s for multi-MB payloads, dominated by
+  the Hilbert-coordinate merge; small metadata-only messages take ~50 ms).
+
 ## How the encoding works (pipeline order matters)
 
 message → UTF-8 → `zlib.compress` → base64 → 7 bits per base64 char (the
