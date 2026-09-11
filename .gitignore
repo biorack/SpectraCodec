@@ -1,0 +1,8 @@
+*.mzML
+*.parquet
+files_to_convert/
+__*/
+.DS_Store
+hf_cache/
+payloads/
+*.pyc

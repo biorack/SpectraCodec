@@ -1,0 +1,24 @@
+name: spectra_codec_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  # core codec dependencies
+  - numpy
+  - lxml
+  - pandas
+  - pyteomics
+  - pymzml
+  - requests
+  # examples / notebooks
+  - matplotlib
+  - scipy
+  - scikit-learn
+  - seaborn
+  - ipykernel
+  - tqdm
+  - pip
+  - pip:
+    - huggingface_hub
+    - openpyxl
