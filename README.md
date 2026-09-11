@@ -43,10 +43,16 @@ print("Decoded message:", message)
 
 ## Try it on real data
 
-Every LCMS run in the public dataset
-[bpbowen/20210915_JGI-AK_MK_506588_SoilWaterRep_final_QE-HF_C18_USDAY63680](https://huggingface.co/datasets/bpbowen/20210915_JGI-AK_MK_506588_SoilWaterRep_final_QE-HF_C18_USDAY63680)
-carries a SpectraCodec message with the run's full metadata (and the
-manuscript it belongs to). Decode one:
+Two public datasets carry SpectraCodec messages in every LCMS run:
+
+- [bpbowen/20210915_JGI-AK_MK_506588_SoilWaterRep_final_QE-HF_C18_USDAY63680](https://huggingface.co/datasets/bpbowen/20210915_JGI-AK_MK_506588_SoilWaterRep_final_QE-HF_C18_USDAY63680)
+  — each run's full metadata (and the manuscript it belongs to)
+- [lbnl-metabolomics/ExoW3-NLDM](https://huggingface.co/datasets/lbnl-metabolomics/ExoW3-NLDM)
+  — each run embeds the experiment's manifest, methods, protocols, compound
+  identifications, and its strain's proteome fasta; the original documents
+  (Excel, PDF, Markdown, fasta) are recoverable byte-for-byte from the spectra
+
+Decode one:
 
 ```bash
 python examples/decode_public_dataset/check_hf_message.py

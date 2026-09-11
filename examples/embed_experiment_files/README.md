@@ -5,6 +5,32 @@ protocols, reference sequences, anything — directly into the mzML files of the
 runs they describe. The files travel with the data forever: anyone who receives
 an mzML (even renamed) can recover every document and verify it byte-for-byte.
 
+## Real-world example
+
+This exact workflow produced the public dataset
+[lbnl-metabolomics/ExoW3-NLDM](https://huggingface.co/datasets/lbnl-metabolomics/ExoW3-NLDM):
+102 LCMS runs, each carrying the experiment's manifest, methods, protocols, and
+compound identifications — plus, in each biological run, the proteome fasta of
+that run's strain (`scope: "run_specific"`). Decode any one file and rebuild
+the documents:
+
+```python
+import json, base64, hashlib
+from huggingface_hub import hf_hub_download
+from spectra_codec import SpectraCodec
+
+repo = "lbnl-metabolomics/ExoW3-NLDM"
+fname = "20260203_EB_MdR_101544-059_ExoW3_20251007_QE119_HILICZ_USHXG03396_NEG_MS2_001_TxCtrl-NLDM-NA-4hr-NA_1__218.mzML"
+path = hf_hub_download(repo, fname, repo_type="dataset")
+
+msg = json.loads(SpectraCodec().decode_message_from_file(path))
+for e in msg["payload"]["files"]:
+    data = (base64.b64decode(e["content"]) if e["content_encoding"] == "base64"
+            else e["content"].encode("utf-8"))
+    assert hashlib.sha256(data).hexdigest() == e["sha256"]
+    open(e["filename"], "wb").write(data)   # working .xlsx / .md / .pdf files
+```
+
 ## Workflow
 
 ```
