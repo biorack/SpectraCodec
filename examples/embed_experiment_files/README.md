@@ -9,7 +9,7 @@ an mzML (even renamed) can recover every document and verify it byte-for-byte.
 
 This exact workflow produced the public dataset
 [lbnl-metabolomics/ExoW3-NLDM](https://huggingface.co/datasets/lbnl-metabolomics/ExoW3-NLDM):
-102 LCMS runs, each carrying the experiment's manifest, methods, protocols, and
+54 LCMS runs, each carrying the experiment's manifest, methods, protocols, and
 compound identifications — plus, in each biological run, the proteome fasta of
 that run's strain (`scope: "run_specific"`). Decode any one file and rebuild
 the documents:
@@ -20,7 +20,7 @@ from huggingface_hub import hf_hub_download
 from spectra_codec import SpectraCodec
 
 repo = "lbnl-metabolomics/ExoW3-NLDM"
-fname = "20260203_EB_MdR_101544-059_ExoW3_20251007_QE119_HILICZ_USHXG03396_NEG_MS2_001_TxCtrl-NLDM-NA-4hr-NA_1__218.mzML"
+fname = "20260203_EB_MdR_101544-059_ExoW3_20251007_QE119_HILICZ_USHXG03396_NEG_MS2_025_TxCtrl-NLDM-NA-24hr-NA_1__146.mzML"
 path = hf_hub_download(repo, fname, repo_type="dataset")
 
 msg = json.loads(SpectraCodec().decode_message_from_file(path))

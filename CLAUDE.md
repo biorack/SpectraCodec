@@ -103,7 +103,7 @@ add huggingface_hub (and openpyxl for xlsx manifests).
   documents (manifest, methods, sequences) into every run, with per-run unique
   IDs and sha256-verified recovery; see its README for the payload schema.
   Real output of this workflow: the public dataset
-  `lbnl-metabolomics/ExoW3-NLDM` (102 runs, docs + per-strain proteome fasta
+  `lbnl-metabolomics/ExoW3-NLDM` (54 runs, docs + per-strain proteome fasta
   embedded in each)
 - `examples/manuscript/` — notebooks and figure code for the SpectraCodec paper
   (`dataset_utils.get_peak_height` additionally needs github.com/biorack/metatlas)
