@@ -9,6 +9,7 @@ dependencies:
   - lxml
   - pandas
   - pyteomics
+  - psims       # required by pyteomics' mzML reader
   - pymzml
   - requests
   # examples / notebooks

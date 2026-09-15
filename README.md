@@ -67,7 +67,8 @@ For a ready-made environment:
 mamba env create -f environment.yml   # creates spectra_codec_env
 ```
 
-Core dependencies: numpy, pandas, lxml, pymzml, pyteomics.
+Core dependencies: numpy, pandas, lxml, pymzml, pyteomics, psims.
+(`openpyxl` is needed to open recovered `.xlsx` files in the examples.)
 
 ## Examples
 
