@@ -13,7 +13,7 @@ import struct
 import re
 import os
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 class SpectraCodec:
     def __init__(self, order=9, encoding_chars=7, min_mz=5, mz_scale=0.0001, 
