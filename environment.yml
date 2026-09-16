@@ -12,6 +12,7 @@ dependencies:
   - psims       # required by pyteomics' mzML reader
   - pymzml
   - requests
+  - cryptography  # Ed25519 signing/verification (provenance block)
   # examples / notebooks
   - matplotlib
   - scipy

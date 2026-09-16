@@ -234,7 +234,8 @@ class SpectraCodec:
 
         self.decoded_message = message
 
-    def encode_message_to_file(self, original_message, input_mzML, output_mzML,method='hilbert'):
+    def encode_message_to_file(self, original_message, input_mzML, output_mzML,method='hilbert',
+                               signing_key_path='auto', key_password=None, key_id=None):
         """
         Encode a message to the first spectrum in an mzml file.
 
@@ -243,12 +244,31 @@ class SpectraCodec:
         input_mzML (str): The input mzML file path.
         output_mzML (str): The output mzML file path.
         method (str): The encoding method to use. Default is 'hilbert'. Options are 'hilbert' or 'sequential'.
-        
+        signing_key_path: 'auto' (default) signs with $SPECTRACODEC_SIGNING_KEY or
+            ~/secrets/spectracodec_private_key if either exists, and encodes
+            unsigned otherwise; a path forces signing with that Ed25519 PEM key;
+            None disables signing. Signing adds a "provenance" block with
+            payload_signature and spectra_signature (see sign_message).
+
+        Returns the exact message string that was encoded.
         """
 
         if method not in ['hilbert', 'sequential']:
             print("Error: Invalid encoding method. Use 'hilbert' or 'sequential'.")
             return None
+
+        if signing_key_path == 'auto':
+            signing_key_path = resolve_signing_key_path()
+            if signing_key_path is None:
+                print("Note: no signing key found; encoding UNSIGNED. "
+                      f"Set ${PRIVATE_KEY_ENV_VAR} or create {DEFAULT_PRIVATE_KEY_PATH} to sign.")
+        if signing_key_path is not None:
+            signed = sign_message(original_message, input_mzML,
+                                  private_key_path=signing_key_path,
+                                  key_password=key_password, key_id=key_id)
+            original_message = json.dumps(signed, separators=(",", ":"))
+        elif not isinstance(original_message, str):
+            original_message = json.dumps(original_message, separators=(",", ":"))
         # Convert the message to a one-hot encoded vector
         if method == 'hilbert':
             # determine the order of the Hilbert curve based on the message length
@@ -274,7 +294,7 @@ class SpectraCodec:
         decoded_message = self.decode_message_from_file(output_mzML, parser='pymzml', method=method)
         # raise error if decoded message is not the same as the original message
         assert decoded_message == original_message, "Decoded message does not match the original message."
-        return None
+        return original_message
     
     def string_to_binary_matrix(self, message):
         """
@@ -505,11 +525,291 @@ class SpectraCodec:
        
         
         # Save the modified mzML file do not proceed until write is complete
-        
+
         # Save the modified mzML file
         tree.write(output_mzML, pretty_print=True, xml_declaration=True, encoding="UTF-8")
 
 
+# ----------------------------------------------------------------------------
+# Signing / verification (tamper evidence)
+#
+# Two Ed25519 signatures are embedded in every signed message, in a
+# top-level "provenance" block:
+#   payload_signature  - over the canonical JSON of the whole message minus
+#                        "provenance" (i.e. unique_file_id + payload):
+#                        proves the embedded metadata/documents are authentic.
+#   spectra_signature  - over unique_file_id + the spectral digest (scd-1):
+#                        proves the acquired spectra are untampered.
+# The spectral digest covers every spectrum EXCEPT the first (the carrier
+# that holds the encoded message), so it is identical before and after
+# encoding - that is what makes signing-then-embedding possible.
+# ----------------------------------------------------------------------------
+
+SIGNING_ALGORITHM = "Ed25519"
+SPECTRAL_DIGEST_SPEC = "scd-1"
+DEFAULT_PRIVATE_KEY_PATH = "~/secrets/spectracodec_private_key"
+PRIVATE_KEY_ENV_VAR = "SPECTRACODEC_SIGNING_KEY"
+KEY_PASSWORD_ENV_VAR = "SPECTRACODEC_KEY_PASSWORD"
+_PAYLOAD_SIG_CONTEXT = b"spectracodec-payload-v1:"
+_SPECTRA_SIG_CONTEXT = b"spectracodec-spectra-v1:"
+
+
+def canonical_json_bytes(obj):
+    """Deterministic JSON serialization used for everything that gets signed."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def compute_spectral_digest(mzml_file, spec=SPECTRAL_DIGEST_SPEC):
+    """
+    Canonical digest of the acquired spectral data (scd-1).
+
+    Chained SHA-256 over every spectrum EXCEPT the first (the SpectraCodec
+    carrier), in file order. Per spectrum it hashes: position among the
+    digested spectra, native spectrum ID, peak count, and the decoded m/z and
+    intensity arrays as little-endian float64 - so the digest is invariant to
+    re-compression / base64 details, and to anything done to spectrum 1.
+    """
+    if spec != SPECTRAL_DIGEST_SPEC:
+        raise ValueError(f"Unknown spectral digest spec: {spec}")
+    h = hashlib.sha256()
+    h.update(spec.encode("utf-8") + b"\x00")
+    run = pymzml.run.Reader(mzml_file)
+    n = 0
+    for i, spectrum in enumerate(run):
+        if i == 0:  # carrier spectrum: excluded by design
+            continue
+        mz = np.asarray(spectrum.mz, dtype="<f8")
+        intensity = np.asarray(spectrum.i, dtype="<f8")
+        h.update(struct.pack(">Q", n))
+        h.update(str(spectrum.ID).encode("utf-8") + b"\x00")
+        h.update(struct.pack(">Q", len(mz)))
+        h.update(mz.tobytes())
+        h.update(intensity.tobytes())
+        n += 1
+    h.update(b"end" + struct.pack(">Q", n))
+    return h.hexdigest()
+
+
+def key_fingerprint(verification_key):
+    """SHA256 fingerprint (base64, unpadded) of the raw 32-byte public key."""
+    from cryptography.hazmat.primitives import serialization
+    raw = verification_key.public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    return "SHA256:" + base64.b64encode(hashlib.sha256(raw).digest()).decode().rstrip("=")
+
+
+def generate_signing_keypair(private_key_path, verification_key_path, password=None):
+    """Mint a new Ed25519 keypair (PEM). Returns the fingerprint."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from cryptography.hazmat.primitives import serialization
+    for p in (private_key_path, verification_key_path):
+        if os.path.exists(os.path.expanduser(p)):
+            raise FileExistsError(f"refusing to overwrite existing key: {p}")
+    priv = Ed25519PrivateKey.generate()
+    enc = (serialization.BestAvailableEncryption(password.encode())
+           if password else serialization.NoEncryption())
+    fd = os.open(os.path.expanduser(private_key_path),
+                 os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(priv.private_bytes(serialization.Encoding.PEM,
+                                   serialization.PrivateFormat.PKCS8, enc))
+    with open(os.path.expanduser(verification_key_path), "wb") as f:
+        f.write(priv.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+    return key_fingerprint(priv.public_key())
+
+
+def resolve_signing_key_path():
+    """Locate a signing key: $SPECTRACODEC_SIGNING_KEY, else ~/secrets/spectracodec_private_key."""
+    env = os.environ.get(PRIVATE_KEY_ENV_VAR)
+    if env and os.path.exists(os.path.expanduser(env)):
+        return os.path.expanduser(env)
+    default = os.path.expanduser(DEFAULT_PRIVATE_KEY_PATH)
+    if os.path.exists(default):
+        return default
+    return None
+
+
+def load_private_key(path, password=None):
+    from cryptography.hazmat.primitives import serialization
+    data = open(os.path.expanduser(path), "rb").read()
+    if password is None:
+        password = os.environ.get(KEY_PASSWORD_ENV_VAR)
+    pw = password.encode() if isinstance(password, str) else password
+    try:
+        return serialization.load_pem_private_key(data, password=pw)
+    except TypeError:
+        if pw is not None:  # password given but key is unencrypted
+            return serialization.load_pem_private_key(data, password=None)
+        raise ValueError(
+            f"Private key {path} is encrypted: pass key_password= or set "
+            f"${KEY_PASSWORD_ENV_VAR}.")
+
+
+def load_verification_key(path_or_pem):
+    """Load a public key from a PEM file path or an in-message PEM string."""
+    from cryptography.hazmat.primitives import serialization
+    if isinstance(path_or_pem, str) and "BEGIN PUBLIC KEY" in path_or_pem:
+        return serialization.load_pem_public_key(path_or_pem.encode("utf-8"))
+    return serialization.load_pem_public_key(
+        open(os.path.expanduser(path_or_pem), "rb").read())
+
+
+def sign_message(message, input_mzML, private_key_path=None, key_password=None,
+                 key_id=None):
+    """
+    Add a "provenance" block with the two signatures to a message dict.
+
+    The spectral digest is computed from input_mzML (the file about to be
+    encoded); because scd-1 excludes the carrier spectrum, the digest of the
+    encoded output will match. Returns a new dict with provenance placed
+    right after unique_file_id.
+    """
+    from cryptography.hazmat.primitives import serialization
+    if isinstance(message, str):
+        message = json.loads(message)
+    if not isinstance(message, dict):
+        raise ValueError("Signing requires the message to be a JSON object.")
+    if private_key_path is None:
+        private_key_path = resolve_signing_key_path()
+        if private_key_path is None:
+            raise FileNotFoundError(
+                f"No signing key found (${PRIVATE_KEY_ENV_VAR} or "
+                f"{DEFAULT_PRIVATE_KEY_PATH}).")
+    priv = load_private_key(private_key_path, key_password)
+    pub = priv.public_key()
+    fingerprint = key_fingerprint(pub)
+
+    unsigned = {k: v for k, v in message.items() if k != "provenance"}
+    digest = {"spec": SPECTRAL_DIGEST_SPEC, "algorithm": "sha256",
+              "value": compute_spectral_digest(input_mzML)}
+    payload_sig = priv.sign(_PAYLOAD_SIG_CONTEXT + canonical_json_bytes(unsigned))
+    spectra_sig = priv.sign(_SPECTRA_SIG_CONTEXT + canonical_json_bytes(
+        {"unique_file_id": unsigned.get("unique_file_id"),
+         "spectral_digest": digest}))
+
+    from datetime import datetime, timezone
+    provenance = {
+        "signing_scheme_version": "1.0",
+        "algorithm": SIGNING_ALGORITHM,
+        "key_id": key_id if key_id is not None else fingerprint,
+        "verification_key": pub.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo).decode("utf-8"),
+        "verification_key_fingerprint": fingerprint,
+        "signed_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "spectral_digest": digest,
+        "payload_signature": base64.b64encode(payload_sig).decode(),
+        "spectra_signature": base64.b64encode(spectra_sig).decode(),
+    }
+    signed = {}
+    if "unique_file_id" in unsigned:
+        signed["unique_file_id"] = unsigned["unique_file_id"]
+    signed["provenance"] = provenance
+    for k, v in unsigned.items():
+        signed.setdefault(k, v)
+    return signed
+
+
+def verify_signed_file(mzml_file, verification_key_path=None):
+    """
+    Decode an encoded mzML and check both signatures.
+
+    verification_key_path: PEM file of the key you TRUST (fetched from the
+    lab's published location). If omitted, the key embedded in the message is
+    used - that only proves internal consistency, not origin, and the report
+    says so via trusted_key_source == "embedded_untrusted".
+
+    Returns a report dict; report["valid"] is the overall verdict.
+    """
+    from cryptography.exceptions import InvalidSignature
+    raw = SpectraCodec().decode_message_from_file(mzml_file)
+    try:
+        message = json.loads(raw)
+    except (TypeError, ValueError):
+        return {"signed": False, "valid": False,
+                "error": "decoded message is not JSON", "message": raw}
+    if not isinstance(message, dict) or "provenance" not in message:
+        return {"signed": False, "valid": False,
+                "error": "message carries no provenance block (unsigned or legacy)",
+                "message": message}
+
+    prov = message["provenance"]
+    if verification_key_path is not None:
+        pub = load_verification_key(verification_key_path)
+        trusted_source = "user_supplied"
+    else:
+        pub = load_verification_key(prov["verification_key"])
+        trusted_source = "embedded_untrusted"
+    fingerprint = key_fingerprint(pub)
+    checks = {}
+    checks["verification_key_matches_supplied"] = (
+        fingerprint == prov.get("verification_key_fingerprint")
+        if verification_key_path is not None else None)
+
+    unsigned = {k: v for k, v in message.items() if k != "provenance"}
+    try:
+        pub.verify(base64.b64decode(prov["payload_signature"]),
+                   _PAYLOAD_SIG_CONTEXT + canonical_json_bytes(unsigned))
+        checks["payload_signature"] = True
+    except InvalidSignature:
+        checks["payload_signature"] = False
+
+    computed = compute_spectral_digest(mzml_file, prov["spectral_digest"]["spec"])
+    checks["spectral_digest"] = (computed == prov["spectral_digest"]["value"])
+    try:
+        pub.verify(base64.b64decode(prov["spectra_signature"]),
+                   _SPECTRA_SIG_CONTEXT + canonical_json_bytes(
+                       {"unique_file_id": unsigned.get("unique_file_id"),
+                        "spectral_digest": prov["spectral_digest"]}))
+        checks["spectra_signature"] = True
+    except InvalidSignature:
+        checks["spectra_signature"] = False
+
+    return {
+        "signed": True,
+        "valid": all(v for v in checks.values() if v is not None),
+        "checks": checks,
+        "trusted_key_source": trusted_source,
+        "verification_key_fingerprint": fingerprint,
+        "key_id": prov.get("key_id"),
+        "signed_at": prov.get("signed_at"),
+        "spectral_digest_expected": prov["spectral_digest"]["value"],
+        "spectral_digest_computed": computed,
+        "unique_file_id": message.get("unique_file_id"),
+        "message": message,
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="SpectraCodec signing tools")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    v = sub.add_parser("verify", help="verify the signatures in an encoded mzML")
+    v.add_argument("mzml")
+    v.add_argument("--key", default=None,
+                   help="trusted verification key (PEM); omit to use the embedded key")
+    k = sub.add_parser("keygen", help="mint a new Ed25519 signing keypair")
+    k.add_argument("private_key_path")
+    k.add_argument("verification_key_path")
+    args = ap.parse_args()
+    if args.cmd == "keygen":
+        fp = generate_signing_keypair(args.private_key_path, args.verification_key_path)
+        print(f"wrote {args.private_key_path} and {args.verification_key_path}")
+        print(f"fingerprint: {fp}")
+    elif args.cmd == "verify":
+        report = verify_signed_file(args.mzml, verification_key_path=args.key)
+        for field in ("signed", "valid", "trusted_key_source", "key_id",
+                      "signed_at", "unique_file_id", "error"):
+            if field in report:
+                print(f"{field}: {report[field]}")
+        for name, ok in report.get("checks", {}).items():
+            print(f"  {name}: {'PASS' if ok else 'n/a' if ok is None else 'FAIL'}")
+        if report.get("trusted_key_source") == "embedded_untrusted":
+            print("WARNING: verified against the key embedded in the file itself; "
+                  "this proves internal consistency, NOT origin. Pass --key with "
+                  "the published verification key to prove origin.")
+        raise SystemExit(0 if report.get("valid") else 1)
 
 
 

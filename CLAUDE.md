@@ -59,6 +59,41 @@ Key facts:
 - Decode is read-only and fast (~3–10 s for multi-MB payloads, dominated by
   the Hilbert-coordinate merge; small metadata-only messages take ~50 ms).
 
+## Signing: tamper evidence (two Ed25519 signatures per message)
+
+Every encode signs automatically when a key is available ($SPECTRACODEC_SIGNING_KEY
+or `~/secrets/spectracodec_private_key`); it adds a top-level `provenance` block
+right after `unique_file_id` with two signatures:
+
+- `payload_signature` — over the canonical JSON of the message minus
+  `provenance`: proves the metadata/embedded documents are authentic.
+- `spectra_signature` — over `unique_file_id` + the spectral digest: proves
+  the acquired spectra are untampered.
+
+The spectral digest (`scd-1`) is a chained SHA-256 over every spectrum
+**except the first** (the carrier), hashing position, native ID, and the
+decoded m/z + intensity arrays as little-endian float64 — so it is identical
+before and after encoding. That exclusion is what makes sign-then-embed
+possible; do not change it without versioning a new spec (`scd-2`, ...).
+
+Verify (works for any third party with the published verification key):
+
+```bash
+python spectra_codec.py verify run.mzML --key spectracodec_verification_key.pem
+```
+
+The repo's published verification key is `spectracodec_verification_key.pem`
+(fingerprint in README.md).
+
+or `spectra_codec.verify_signed_file(path, verification_key_path=...)` →
+report dict with `valid` + per-check booleans. Omitting the key verifies
+against the key embedded in the file — internal consistency only, NOT origin
+(report says `embedded_untrusted`). Unsigned/legacy files report
+`signed: False` gracefully. `python spectra_codec.py keygen <priv> <pub>`
+mints a keypair. Sha256 hashes and the mzML checksum are unkeyed and can be
+recomputed by an attacker; only the signatures prove origin. The private key
+must never enter this (public) repo.
+
 ## How the encoding works (pipeline order matters)
 
 message → UTF-8 → `zlib.compress` → base64 → 7 bits per base64 char (the

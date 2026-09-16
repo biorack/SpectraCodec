@@ -58,6 +58,37 @@ Decode one:
 python examples/decode_public_dataset/check_hf_message.py
 ```
 
+## Signed messages: proving a run is authentic
+
+Hashes alone can't stop tampering — anyone can edit spectra and recompute
+every checksum. SpectraCodec therefore embeds two Ed25519 signatures in a
+`provenance` block of each signed message: one over the message payload (the
+metadata and embedded documents), one over a digest of all acquired spectra
+(everything except the carrier spectrum that holds the message). An attacker
+who alters either the data or the metadata cannot re-create the signatures
+without the signer's private key.
+
+Verify a run against a published verification key:
+
+```bash
+python spectra_codec.py verify run.mzML --key spectracodec_verification_key.pem
+```
+
+`spectracodec_verification_key.pem` in this repository is the LBNL
+SpectraCodec verification key. Its fingerprint (SHA-256 of the raw 32-byte
+public key) is:
+
+```
+SHA256:lbrclU9WYbrXjl/AWl8VOWFUEm5EQgGybgdSKZzTwfA
+```
+
+A valid signature from this key means the run was signed by the holder of the
+corresponding private key and has not been modified since. Verifying without
+`--key` uses the key embedded in the file itself, which only proves internal
+consistency — not origin. To sign your own runs, mint a keypair with
+`python spectra_codec.py keygen`, keep the private key out of any repository,
+and publish the verification key and its fingerprint somewhere you control.
+
 ## Installation
 
 No package install needed — `spectra_codec.py` is a single-file library.
