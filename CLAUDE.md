@@ -132,7 +132,7 @@ add huggingface_hub (and openpyxl for xlsx manifests).
 
 - `spectra_codec.py` — the library (this is the whole product)
 - `examples/decode_public_dataset/` — download one file from the public HF
-  dataset (`bpbowen/20210915_JGI-AK_MK_506588_SoilWaterRep_...`) and decode its
+  dataset (`lbnl-metabolomics/20210915_JGI-AK_MK_506588_SoilWaterRep_...`) and decode its
   embedded message; plus a decode-speed benchmark
 - `examples/embed_experiment_files/` — full workflow embedding an experiment's
   documents (manifest, methods, sequences) into every run, with per-run unique

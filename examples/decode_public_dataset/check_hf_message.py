@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from huggingface_hub import list_repo_files, hf_hub_download
 from spectra_codec import SpectraCodec
 
-REPO_ID = "bpbowen/20210915_JGI-AK_MK_506588_SoilWaterRep_final_QE-HF_C18_USDAY63680"
+REPO_ID = "lbnl-metabolomics/20210915_JGI-AK_MK_506588_SoilWaterRep_final_QE-HF_C18_USDAY63680"
 
 
 def main():
